@@ -674,9 +674,9 @@ def convert(data: tuple[int, str]) -> Optional[str]:  # noqa: C901, PLR0911, PLR
     # Energy
     energy: Optional[int] = None
     if nutriments.energy_kcal is not None:
-        energy = nutriments.energy_kcal
+        energy = factor * nutriments.energy_kcal
     elif nutriments.energy_kj is not None:
-        energy = nutriments.energy_kj * 0.23900574
+        energy = factor * nutriments.energy_kj * 0.23900574
 
     # Vitamin B3
     vitamin_b3: Optional[float] = convert_nutrient(
