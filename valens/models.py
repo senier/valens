@@ -448,3 +448,76 @@ class WorkoutRest(WorkoutElement):
         "polymorphic_identity": "rest",
         "polymorphic_load": "selectin",
     }
+
+
+class Unit(enum.IntEnum):
+    G = 0
+    ML = 1
+
+
+class OpenFoodFactsEntry(Base):
+    __tablename__ = "nutrition_off"
+    __table_args__ = (UniqueConstraint("code", sqlite_on_conflict="REPLACE"),)
+
+    code: Mapped[str] = mapped_column(String, primary_key=True)
+
+    created: Mapped[datetime.date] = mapped_column(Date)
+    last_updated: Mapped[datetime.date] = mapped_column(Date)
+    name: Mapped[str] = mapped_column(String, nullable=False)
+
+    quantity: Mapped[Optional[float]] = mapped_column(Float)
+    unit: Mapped[Optional[Unit]] = mapped_column(Enum(Unit))
+    serving_quantity: Mapped[Optional[float]] = mapped_column(Float)
+
+    localized_names: Mapped[Optional[str]] = mapped_column(String)
+    brands: Mapped[Optional[str]] = mapped_column(String)
+
+    alcohol: Mapped[Optional[float]] = mapped_column(Float)
+    bicarbonate: Mapped[Optional[float]] = mapped_column(Float)
+    caffeine: Mapped[Optional[float]] = mapped_column(Float)
+    calcium: Mapped[Optional[float]] = mapped_column(Float)
+    carbohydrates: Mapped[Optional[float]] = mapped_column(Float)
+    chloride: Mapped[Optional[float]] = mapped_column(Float)
+    cholesterol: Mapped[Optional[float]] = mapped_column(Float)
+    chromium: Mapped[Optional[float]] = mapped_column(Float)
+    copper: Mapped[Optional[float]] = mapped_column(Float)
+    energy: Mapped[Optional[float]] = mapped_column(Float)
+    fat: Mapped[Optional[float]] = mapped_column(Float)
+    fiber: Mapped[Optional[float]] = mapped_column(Float)
+    fluoride: Mapped[Optional[float]] = mapped_column(Float)
+    iodine: Mapped[Optional[float]] = mapped_column(Float)
+    iron: Mapped[Optional[float]] = mapped_column(Float)
+    lactose: Mapped[Optional[float]] = mapped_column(Float)
+    magnesium: Mapped[Optional[float]] = mapped_column(Float)
+    manganese: Mapped[Optional[float]] = mapped_column(Float)
+    molybdenum: Mapped[Optional[float]] = mapped_column(Float)
+    monounsaturated_fat: Mapped[Optional[float]] = mapped_column(Float)
+    omega_3_fat: Mapped[Optional[float]] = mapped_column(Float)
+    omega_6_fat: Mapped[Optional[float]] = mapped_column(Float)
+    phosphorus: Mapped[Optional[float]] = mapped_column(Float)
+    polyunsaturated_fat: Mapped[Optional[float]] = mapped_column(Float)
+    potassium: Mapped[Optional[float]] = mapped_column(Float)
+    proteins: Mapped[Optional[float]] = mapped_column(Float)
+    salt: Mapped[Optional[float]] = mapped_column(Float)
+    saturated_fat: Mapped[Optional[float]] = mapped_column(Float)
+    selenium: Mapped[Optional[float]] = mapped_column(Float)
+    sodium: Mapped[Optional[float]] = mapped_column(Float)
+    starch: Mapped[Optional[float]] = mapped_column(Float)
+    sugars: Mapped[Optional[float]] = mapped_column(Float)
+    taurine: Mapped[Optional[float]] = mapped_column(Float)
+    trans_fat: Mapped[Optional[float]] = mapped_column(Float)
+    vitamin_a: Mapped[Optional[float]] = mapped_column(Float)
+    vitamin_b12: Mapped[Optional[float]] = mapped_column(Float)
+    vitamin_b1: Mapped[Optional[float]] = mapped_column(Float)
+    vitamin_b2: Mapped[Optional[float]] = mapped_column(Float)
+    vitamin_b3: Mapped[Optional[float]] = mapped_column(Float)
+    vitamin_b5: Mapped[Optional[float]] = mapped_column(Float)
+    vitamin_b6: Mapped[Optional[float]] = mapped_column(Float)
+    vitamin_b7: Mapped[Optional[float]] = mapped_column(Float)
+    vitamin_b9: Mapped[Optional[float]] = mapped_column(Float)
+    vitamin_c: Mapped[Optional[float]] = mapped_column(Float)
+    vitamin_d: Mapped[Optional[float]] = mapped_column(Float)
+    vitamin_e: Mapped[Optional[float]] = mapped_column(Float)
+    vitamin_k: Mapped[Optional[float]] = mapped_column(Float)
+    vitamin_k1: Mapped[Optional[float]] = mapped_column(Float)
+    zinc: Mapped[Optional[float]] = mapped_column(Float)
