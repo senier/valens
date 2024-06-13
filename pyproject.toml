@@ -33,6 +33,7 @@ python = ">=3.9, <4"
 alembic = ">=1.6, <2"
 flask = ">=3, <4"
 sqlalchemy = ">=2, <3"
+pydantic = ">=2, <3"
 
 [tool.poetry.group.dev.dependencies]
 black = ">=23.1"
@@ -205,7 +206,10 @@ warn_unreachable = true
 warn_unused_configs = true
 warn_unused_ignores = true
 
-plugins = "sqlalchemy.ext.mypy.plugin"
+plugins = [
+    "sqlalchemy.ext.mypy.plugin",
+    "pydantic.mypy",
+]
 
 [[tool.mypy.overrides]]
 module = [
@@ -213,6 +217,10 @@ module = [
     "sqlalchemy_repr.*",
 ]
 ignore_missing_imports = true
+
+[tool.pydantic-mypy]
+init_forbid_extra = true
+init_typed = true
 
 [tool.pytest.ini_options]
 addopts = "--tb=short"
