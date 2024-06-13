@@ -1,19 +1,16 @@
 #!/usr/bin/env python3
 
-# FIXME:
-#  - validate
-
-
 import datetime
-import enum
 import gzip
 import json
 import multiprocessing
 from pathlib import Path
+import sys
 from typing import Optional
 
-import tqdm
 from pydantic import BaseModel, Field
+
+from valens import app, database, models
 
 ETHANOL_DENSITY_G_PER_ML = 0.789
 
@@ -107,15 +104,11 @@ LANGUAGES = [
     "zh",
 ]
 
-
-class CodeType(enum.StrEnum):
-    EAN_8 = "ean-8"
-    EAN_13 = "ean-13"
-
-
-class Unit(enum.StrEnum):
-    GRAMS = "g"
-    MILLILITERS = "ml"
+UNITS = {
+    None: models.Unit.G,
+    "g": models.Unit.G,
+    "ml": models.Unit.ML,
+}
 
 
 class OpenFoodFactsNutriments(BaseModel):
@@ -399,77 +392,6 @@ class OpenFoodFactsEntry(BaseModel):
     obsolete: Optional[str] = Field(default=None)
 
 
-class OpenFoodFactsOutputEntry(BaseModel):
-
-    identifier: int = Field(default=None, alias="identifier")
-    code: str
-    code_type: CodeType
-    created: datetime.date
-    last_updated: datetime.date
-    name: str
-
-    # FIXME: remove
-    entry: int
-    factor: float
-
-    quantity: Optional[float] = Field(default=None)
-    unit: Optional[str] = Field(default=None)
-    serving_quantity: Optional[float] = Field(default=None)
-
-    localized_names: Optional[dict[str, str]] = Field()
-    brands: Optional[list[str]] = Field()
-
-    alcohol: Optional[float] = Field(default=None)
-    bicarbonate: Optional[float] = Field(default=None)
-    caffeine: Optional[float] = Field(default=None)
-    calcium: Optional[float] = Field(default=None)
-    carbohydrates: Optional[float] = Field(default=None)
-    chloride: Optional[float] = Field(default=None)
-    cholesterol: Optional[float] = Field(default=None)
-    chromium: Optional[float] = Field(default=None)
-    copper: Optional[float] = Field(default=None)
-    energy: Optional[float] = Field(default=None)
-    fat: Optional[float] = Field(default=None)
-    fiber: Optional[float] = Field(default=None)
-    fluoride: Optional[float] = Field(default=None)
-    iodine: Optional[float] = Field(default=None)
-    iron: Optional[float] = Field(default=None)
-    lactose: Optional[float] = Field(default=None)
-    magnesium: Optional[float] = Field(default=None)
-    manganese: Optional[float] = Field(default=None)
-    molybdenum: Optional[float] = Field(default=None)
-    monounsaturated_fat: Optional[float] = Field(default=None)
-    omega_3_fat: Optional[float] = Field(default=None)
-    omega_6_fat: Optional[float] = Field(default=None)
-    phosphorus: Optional[float] = Field(default=None)
-    polyunsaturated_fat: Optional[float] = Field(default=None)
-    potassium: Optional[float] = Field(default=None)
-    proteins: Optional[float] = Field(default=None)
-    salt: Optional[float] = Field(default=None)
-    saturated_fat: Optional[float] = Field(default=None)
-    selenium: Optional[float] = Field(default=None)
-    sodium: Optional[float] = Field(default=None)
-    starch: Optional[float] = Field(default=None)
-    sugars: Optional[float] = Field(default=None)
-    taurine: Optional[float] = Field(default=None)
-    trans_fat: Optional[float] = Field(default=None)
-    vitamin_a: Optional[float] = Field(default=None)
-    vitamin_b12: Optional[float] = Field(default=None)
-    vitamin_b1: Optional[float] = Field(default=None)
-    vitamin_b2: Optional[float] = Field(default=None)
-    vitamin_b3: Optional[float] = Field(default=None)
-    vitamin_b5: Optional[float] = Field(default=None)
-    vitamin_b6: Optional[float] = Field(default=None)
-    vitamin_b7: Optional[float] = Field(default=None)
-    vitamin_b9: Optional[float] = Field(default=None)
-    vitamin_c: Optional[float] = Field(default=None)
-    vitamin_d: Optional[float] = Field(default=None)
-    vitamin_e: Optional[float] = Field(default=None)
-    vitamin_k: Optional[float] = Field(default=None)
-    vitamin_k1: Optional[float] = Field(default=None)
-    zinc: Optional[float] = Field(default=None)
-
-
 def convert_nutrient(  # noqa: C901, PLR0911, PLR0912
     value: Optional[float],
     unit: Optional[str],
@@ -577,9 +499,11 @@ def valid_ean13(ean: str) -> bool:
     ) % 10 == 0
 
 
-def convert(data: tuple[int, str]) -> Optional[str]:  # noqa: C901, PLR0911, PLR0915, PLR0912
+def convert_entry(  # noqa: PLR0912, PLR0911, C901, PLR0915
+    line: bytes,
+) -> Optional[models.OpenFoodFactsEntry]:
 
-    entry = OpenFoodFactsEntry(**json.loads(data[1]))
+    entry = OpenFoodFactsEntry(**json.loads(line.decode()))
 
     if entry.no_nutrition_data and entry.no_nutrition_data.lower() in ["on", "true"]:
         return None
@@ -604,34 +528,25 @@ def convert(data: tuple[int, str]) -> Optional[str]:  # noqa: C901, PLR0911, PLR
 
     # Validate EAN code
     code: Optional[str] = None
-    code_type: Optional[CodeType] = None
 
     if "code-8" in entry.codes_tags:
         code = entry.code.zfill(8)
         if not valid_ean8(code):
             return None
-        code_type = CodeType.EAN_8
     elif "code-13" in entry.codes_tags:
-        assert code_type is None
         code = entry.code.zfill(13)
         if not valid_ean13(code):
             return None
-        code_type = CodeType.EAN_13
-
-    if code_type is None:
+    else:
         return None
 
-    assert entry.nutriments is not None or entry.nutriments_estimated is not None
-
     nutriments = entry.nutriments or entry.nutriments_estimated
+    assert nutriments is not None
+
     created = datetime.date.fromtimestamp(entry.created_t)
 
     quantity: Optional[float] = entry.product_quantity or None
-    unit: Optional[float] = (
-        Unit(entry.product_quantity_unit)
-        if entry.product_quantity_unit in ["g", "ml"]
-        else Unit("g")
-    )
+    unit: Optional[models.Unit] = UNITS.get(entry.product_quantity_unit, models.Unit.G)
 
     serving_quantity: Optional[float] = None
     if entry.serving_quantity:
@@ -649,7 +564,7 @@ def convert(data: tuple[int, str]) -> Optional[str]:  # noqa: C901, PLR0911, PLR
     # Adjust factor if nutrition data is per serving
     if entry.nutrition_data_per and entry.nutrition_data_per == "serving":
         if serving_quantity:
-            factor *= 100.0 / entry.serving_quantity
+            factor *= 100.0 / serving_quantity
         else:
             return None
 
@@ -672,7 +587,7 @@ def convert(data: tuple[int, str]) -> Optional[str]:  # noqa: C901, PLR0911, PLR
             raise NotImplementedError(f"{nutriments.alcohol=}, {nutriments.alcohol_unit=}")
 
     # Energy
-    energy: Optional[int] = None
+    energy: Optional[float] = None
     if nutriments.energy_kcal is not None:
         energy = factor * nutriments.energy_kcal
     elif nutriments.energy_kj is not None:
@@ -724,30 +639,20 @@ def convert(data: tuple[int, str]) -> Optional[str]:  # noqa: C901, PLR0911, PLR
     elif folates is not None:
         vitamin_b9 = folates
 
-    localized_names = {
-        language: getattr(entry, f"product_name_{language}") for language in LANGUAGES
-    }
+    localized_names = ",".join(
+        f"{language}:{getattr(entry, f'product_name_{language}')}"
+        for language in LANGUAGES
+        if (
+            getattr(entry, f"product_name_{language}")
+            and getattr(entry, f"product_name_{language}") != entry.product_name
+        )
+    )
 
-    return OpenFoodFactsOutputEntry(
-        identifier=int(entry.identifier),
-        code=code,
-        code_type=code_type,
-        created=created,
-        last_updated=(
-            datetime.date.fromtimestamp(entry.last_updated_t) if entry.last_updated_t else created
-        ),
-        name=entry.product_name,
-        localized_names=(
-            {k: v for k, v in localized_names.items() if v} if localized_names else None
-        ),
-        brands=[brand.strip() for brand in entry.brands.split(",")] if entry.brands else None,
-        alcohol=alcohol or None,
-        energy=energy or None,
-        vitamin_b3=vitamin_b3 or None,
-        vitamin_b9=vitamin_b9 or None,
-        quantity=quantity,
-        serving_quantity=serving_quantity,
-        unit=unit,
+    nutriment_values = {
+        "alcohol": alcohol or None,
+        "energy": energy or None,
+        "vitamin_b3": vitamin_b3 or None,
+        "vitamin_b9": vitamin_b9 or None,
         **{
             name: convert_nutrient(
                 value=getattr(nutriments, name),
@@ -759,30 +664,59 @@ def convert(data: tuple[int, str]) -> Optional[str]:  # noqa: C901, PLR0911, PLR
             or None
             for name in REGULAR_NUTRIMENT_NAMES
         },
-        entry=data[0],  # FIXME: remove
-        factor=factor,  # FIXME: remove
-    ).model_dump_json()
+    }
+
+    if all(v is None for v in nutriment_values.values()):
+        return None
+
+    return models.OpenFoodFactsEntry(
+        code=code,
+        created=created,
+        last_updated=(
+            datetime.date.fromtimestamp(entry.last_updated_t) if entry.last_updated_t else created
+        ),
+        name=entry.product_name,
+        localized_names=localized_names or None,
+        brands=(
+            ",".join(brand.strip() for brand in entry.brands.split(",")) if entry.brands else None
+        ),
+        serving_quantity=serving_quantity,
+        quantity=quantity,
+        unit=unit,
+        **nutriment_values,
+    )
 
 
-def import_off(file: Path):
+def import_off(file: Path) -> None:
     total = 0
     valid = 0
-    with multiprocessing.Pool(multiprocessing.cpu_count()) as p, Path("output.json").open("w") as o:
-        for n in tqdm.tqdm(
-            p.imap(
-                func=convert,
-                iterable=enumerate(gzip.open(file), 1),
-                chunksize=1000 * multiprocessing.cpu_count(),
-            )
+    entries = []
+    with (
+        multiprocessing.Pool(multiprocessing.cpu_count()) as p,
+        app.app_context(),
+    ):
+        for entry in p.imap(
+            func=convert_entry,
+            iterable=enumerate(gzip.open(file)),
+            chunksize=1000 * multiprocessing.cpu_count(),
         ):
             total += 1
-            if n is None:
+            if entry is None:
                 continue
-            valid += 1
-            o.write(f"{n}\n")
 
-    print(f"{valid} out of {total} valid ({100 * valid/total:.1f}%)")
+            valid += 1
+            entries.append(entry)
+
+            if valid % 10000 == 0:
+                print(f"Valid entries: {valid}/{total}")
+                database.session.add_all(entries)
+                database.session.commit()
+                entries = []
+
+        print(f"Valid entries: {valid}/{total}")
+        database.session.add_all(entries)
+        database.session.commit()
 
 
 if __name__ == "__main__":
-    import_off("openfoodfacts-products.jsonl.gz")
+    import_off(Path(sys.argv[1]))
