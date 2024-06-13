@@ -8,6 +8,7 @@ pub mod login;
 pub mod menstrual_cycle;
 pub mod muscles;
 pub mod not_found;
+pub mod nutrition;
 pub mod routine;
 pub mod routines;
 pub mod training;

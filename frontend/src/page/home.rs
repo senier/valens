@@ -52,6 +52,8 @@ pub fn view(_model: &Model, data_model: &data::Model) -> Node<Msg> {
     let body_weight_content;
     let body_fat_subtitle;
     let body_fat_content;
+    let nutrition_subtitle = String::new();
+    let nutrition_content = String::new();
 
     let training_subtitle =
         if data_model.training_sessions.is_empty() && data_model.loading_training_sessions {
@@ -147,6 +149,12 @@ pub fn view(_model: &Model, data_model: &data::Model) -> Node<Msg> {
             &body_fat_subtitle,
             &body_fat_content,
             crate::Urls::new(&data_model.base_url).body_fat()
+        ),
+        view_tile(
+            "Nutrition",
+            &nutrition_subtitle,
+            &nutrition_content,
+            crate::Urls::new(&data_model.base_url).nutrition()
         ),
         IF![
             data_model.session.as_ref().unwrap().sex == 0 => {

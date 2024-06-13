@@ -56,6 +56,7 @@ const ROUTINES: &str = "routines";
 const ROUTINE: &str = "routine";
 const TRAINING: &str = "training";
 const TRAINING_SESSION: &str = "training_session";
+const NUTRITION: &str = "nutrition";
 
 struct_urls!();
 impl<'a> Urls<'a> {
@@ -98,6 +99,9 @@ impl<'a> Urls<'a> {
     pub fn training_session(self) -> Url {
         self.base_url().set_hash_path([TRAINING_SESSION])
     }
+    pub fn nutrition(self) -> Url {
+        self.base_url().set_hash_path([NUTRITION])
+    }
 }
 
 // ------ ------
@@ -131,6 +135,7 @@ enum Page {
     Routine(page::routine::Model),
     Training(page::training::Model),
     TrainingSession(page::training_session::Model),
+    Nutrition(page::nutrition::Model),
     NotFound,
 }
 
@@ -214,6 +219,12 @@ impl Page {
                     data_model,
                     navbar,
                 )),
+                Some(NUTRITION) => Self::Nutrition(page::nutrition::init(
+                    url,
+                    &mut orders.proxy(Msg::Nutrition),
+                    data_model,
+                    navbar,
+                )),
                 Some(_) => Self::NotFound,
             }
         } else {
@@ -270,6 +281,7 @@ enum Msg {
     Routine(page::routine::Msg),
     Training(page::training::Msg),
     TrainingSession(page::training_session::Msg),
+    Nutrition(page::nutrition::Msg),
 
     // ------ Data ------
     Data(data::Msg),
@@ -362,6 +374,7 @@ fn update(msg: Msg, model: &mut Model, orders: &mut impl Orders<Msg>) {
                 | Page::BodyFat(_)
                 | Page::MenstrualCycle(_)
                 | Page::Training(_)
+                | Page::Nutrition(_)
                 | Page::NotFound,
             )
             | None => {
@@ -494,6 +507,16 @@ fn update(msg: Msg, model: &mut Model, orders: &mut impl Orders<Msg>) {
                     page_model,
                     &model.data,
                     &mut orders.proxy(Msg::TrainingSession),
+                );
+            }
+        }
+        Msg::Nutrition(msg) => {
+            if let Some(Page::Nutrition(page_model)) = &mut model.page {
+                page::nutrition::update(
+                    msg,
+                    page_model,
+                    &model.data,
+                    &mut orders.proxy(Msg::Nutrition),
                 );
             }
         }
@@ -680,6 +703,8 @@ fn view_page(page: &Option<Page>, data_model: &data::Model) -> Node<Msg> {
                 page::training::view(model, data_model).map_msg(Msg::Training),
             Some(Page::TrainingSession(model)) =>
                 page::training_session::view(model, data_model).map_msg(Msg::TrainingSession),
+            Some(Page::Nutrition(model)) =>
+                page::nutrition::view(model, data_model).map_msg(Msg::Nutrition),
             Some(Page::NotFound) => page::not_found::view(),
             None => common::view_loading(),
         }
