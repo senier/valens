@@ -3,9 +3,8 @@
 import datetime
 import gzip
 import json
-import multiprocessing
-from pathlib import Path
 import sys
+from pathlib import Path
 from typing import Optional
 
 from pydantic import BaseModel, Field
@@ -111,7 +110,12 @@ UNITS = {
 }
 
 
+class InvalidDataError(Exception):
+    pass
+
+
 class OpenFoodFactsNutriments(BaseModel):
+    """Model for importing OpenFoodFacts "nutriments" sub-entry from JSONL dump."""
 
     alcohol: Optional[float] = Field(default=None)
     alcohol_unit: Optional[str] = Field(default=None)
@@ -324,6 +328,7 @@ class OpenFoodFactsNutriments(BaseModel):
 
 
 class OpenFoodFactsEntry(BaseModel):
+    """Model for importing OpenFoodFacts entry from JSONL dump."""
 
     identifier: Optional[str] = Field(default=None, alias="id")
     code: str
@@ -392,7 +397,7 @@ class OpenFoodFactsEntry(BaseModel):
     obsolete: Optional[str] = Field(default=None)
 
 
-def convert_nutrient(  # noqa: C901, PLR0911, PLR0912
+def _convert_nutrient(  # noqa: C901
     value: Optional[float],
     unit: Optional[str],
     value_100g: Optional[float],
@@ -421,57 +426,48 @@ def convert_nutrient(  # noqa: C901, PLR0911, PLR0912
     if unit == "IU":
         if name == "vitamin_a":
             # Source: https://ods.od.nih.gov/factsheets/VitaminA-HealthProfessional/
-            return factor * value / 300000.0
+            return factor * value * 0.0000003
         if name == "vitamin_d":
             # Source: https://ods.od.nih.gov/factsheets/VitaminD-HealthProfessional/
-            return factor * value / 40000000.0
+            return factor * value * 0.000000025
         if name == "vitamin_e":
             # Source: https://ods.od.nih.gov/factsheets/VitaminE-HealthProfessional/
-            return factor * value * 0.00067
-        if name in ["calcium", "vitamin_c", "iron"]:
-            # Invalid
-            return None
+            return factor * value * 0.00000067
 
-        raise NotImplementedError(f"IU for {name}")
-
-    if unit == "ml":
-        # FIXME: ml not supported
-        return None
-
-    if unit in ["% DV", "%"]:
-        return None
-
-    raise NotImplementedError(f"{name} {value=}, {unit=}")
+    return None
 
 
-def valid_ean_country_code(code: int) -> bool:
+def _valid_ean_country_code(code: int) -> bool:
+    """
+    Check whether `code` is a valid country prefix for use in product bar codes.
 
-    # Source: https://en.wikipedia.org/wiki/List_of_GS1_country_codes
+    Source: https://www.gs1.org/standards/id-keys/company-prefix
+    """
 
+    # Restricted Circulation Numbers
     if 20 <= code < 30:
-        # Restricted Circulation Numbers
         return False
 
+    # Restricted Circulation Numbers
     if 40 <= code < 50:
-        # Restricted Circulation Numbers
         return False
 
+    # Restricted Circulation Numbers
     if 200 <= code < 300:
-        # Restricted Circulation Numbers
         return False
 
+    # Other restricted uses
     if code > 958:
-        # Other restricted uses
         return False
 
     return True
 
 
-def valid_ean8(ean: str) -> bool:
+def _valid_ean8(ean: str) -> bool:
     if len(ean) != 8 or not ean.isdigit():
         return False
 
-    if not valid_ean_country_code(int(ean[0:3])):
+    if not _valid_ean_country_code(int(ean[0:3])):
         return False
 
     return (
@@ -479,7 +475,13 @@ def valid_ean8(ean: str) -> bool:
     ) % 10 == 0
 
 
-def valid_ean13(ean: str) -> bool:
+def _valid_ean13(ean: str) -> bool:
+    """
+    Check whether `ean` is a valid EAN-13 code.
+
+    Source: https://www.gs1.org/standards/id-keys/company-prefix
+    """
+
     if len(ean) != 13 or not ean.isdigit():
         return False
 
@@ -491,7 +493,7 @@ def valid_ean13(ean: str) -> bool:
         # Unused to avoid EAN-8 collision
         return False
 
-    if not valid_ean_country_code(int(ean[0:3])):
+    if not _valid_ean_country_code(int(ean[0:3])):
         return False
 
     return (
@@ -499,49 +501,54 @@ def valid_ean13(ean: str) -> bool:
     ) % 10 == 0
 
 
-def convert_entry(  # noqa: PLR0912, PLR0911, C901, PLR0915
+def _convert_entry(  # noqa: PLR0912, C901, PLR0915
     line: bytes,
-) -> Optional[models.OpenFoodFactsEntry]:
+) -> models.OpenFoodFactsEntry:
 
-    entry = OpenFoodFactsEntry(**json.loads(line.decode()))
+    try:
+        entry = OpenFoodFactsEntry(**json.loads(line.decode()))
+    except json.JSONDecodeError as e:
+        raise InvalidDataError(str(e)) from e
 
     if entry.no_nutrition_data and entry.no_nutrition_data.lower() in ["on", "true"]:
-        return None
+        raise InvalidDataError("no nutrition data")
 
     if entry.identifier is None:
-        return None
+        raise InvalidDataError("no identifier")
 
     if int(entry.identifier) == 0:
-        return None
+        raise InvalidDataError(f"invalid identifier ({entry.identifier})")
 
     if entry.created_t is None:
-        return None
+        raise InvalidDataError("no creation date")
 
     if entry.product_name is None:
-        return None
+        raise InvalidDataError("no product name")
 
     if not entry.codes_tags:
-        return None
+        raise InvalidDataError("no codes tags")
 
     if entry.obsolete and entry.obsolete.lower() == "on":
-        return None
+        raise InvalidDataError("obsolete entry")
 
     # Validate EAN code
     code: Optional[str] = None
 
     if "code-8" in entry.codes_tags:
         code = entry.code.zfill(8)
-        if not valid_ean8(code):
-            return None
+        if not _valid_ean8(code):
+            raise InvalidDataError("invalid EAN-8 code")
     elif "code-13" in entry.codes_tags:
         code = entry.code.zfill(13)
-        if not valid_ean13(code):
-            return None
+        if not _valid_ean13(code):
+            raise InvalidDataError("invalid EAN-13 code")
     else:
-        return None
+        raise InvalidDataError("no supported code tag found")
 
     nutriments = entry.nutriments or entry.nutriments_estimated
-    assert nutriments is not None
+
+    if nutriments is None:
+        raise InvalidDataError("no nutriments present")
 
     created = datetime.date.fromtimestamp(entry.created_t)
 
@@ -553,11 +560,13 @@ def convert_entry(  # noqa: PLR0912, PLR0911, C901, PLR0915
         if entry.serving_quantity_unit in ["g", None]:
             serving_quantity = entry.serving_quantity
         elif entry.serving_quantity_unit in ["%"]:
-            serving_quantity = entry.serving_quantity / 100.0 * quantity if quantity else None
-        elif entry.serving_quantity_unit in ["ml", "mmol/l"]:
-            return None
+            if quantity is None:
+                raise InvalidDataError("serving_quantity in percent, but no product_quantity")
+            serving_quantity = entry.serving_quantity / 100.0 * quantity
         else:
-            return None
+            raise InvalidDataError(
+                f"unsupported serving quantity unit: {entry.serving_quantity_unit}"
+            )
 
     factor = 1.0
 
@@ -566,25 +575,19 @@ def convert_entry(  # noqa: PLR0912, PLR0911, C901, PLR0915
         if serving_quantity:
             factor *= 100.0 / serving_quantity
         else:
-            return None
+            raise InvalidDataError("nutrition data per serving, but no serving quantity")
 
     # Alcohol
     alcohol: Optional[float] = None
     if nutriments.alcohol is not None:
-        assert nutriments.alcohol_unit is not None
+        if nutriments.alcohol_unit is None:
+            raise InvalidDataError("alcohol has no unit")
         if nutriments.alcohol_unit in ["% vol", "% vol / *", "vol", "%"]:
             alcohol = factor * nutriments.alcohol * ETHANOL_DENSITY_G_PER_ML
         elif nutriments.alcohol_unit == "g":
             alcohol = factor * nutriments.alcohol
-        elif nutriments.alcohol_unit in ["-"]:
-            return None
-        elif nutriments.alcohol_unit == "":
-            if nutriments.alcohol == 0:
-                # just leave this a null entry
-                pass
-            return None
         else:
-            raise NotImplementedError(f"{nutriments.alcohol=}, {nutriments.alcohol_unit=}")
+            raise InvalidDataError(f"invalid alcohol unit: {nutriments.alcohol_unit}")
 
     # Energy
     energy: Optional[float] = None
@@ -594,7 +597,7 @@ def convert_entry(  # noqa: PLR0912, PLR0911, C901, PLR0915
         energy = factor * nutriments.energy_kj * 0.23900574
 
     # Vitamin B3
-    vitamin_b3: Optional[float] = convert_nutrient(
+    vitamin_b3: Optional[float] = _convert_nutrient(
         value=nutriments.vitamin_b3,
         unit=nutriments.vitamin_b3_unit,
         value_100g=nutriments.vitamin_b3_100g,
@@ -602,7 +605,7 @@ def convert_entry(  # noqa: PLR0912, PLR0911, C901, PLR0915
         name="vitamin_b3",
     )
 
-    vitamin_pp: Optional[float] = convert_nutrient(
+    vitamin_pp: Optional[float] = _convert_nutrient(
         value=nutriments.vitamin_pp,
         unit=nutriments.vitamin_pp_unit,
         value_100g=nutriments.vitamin_pp_100g,
@@ -617,7 +620,7 @@ def convert_entry(  # noqa: PLR0912, PLR0911, C901, PLR0915
         vitamin_b3 = vitamin_pp
 
     # Vitamin B9
-    vitamin_b9: Optional[float] = convert_nutrient(
+    vitamin_b9: Optional[float] = _convert_nutrient(
         value=nutriments.vitamin_b9,
         unit=nutriments.vitamin_b9_unit,
         value_100g=nutriments.vitamin_b9_100g,
@@ -625,7 +628,7 @@ def convert_entry(  # noqa: PLR0912, PLR0911, C901, PLR0915
         name="vitamin_b9",
     )
 
-    folates: Optional[float] = convert_nutrient(
+    folates: Optional[float] = _convert_nutrient(
         value=nutriments.folates,
         unit=nutriments.folates_unit,
         value_100g=nutriments.folates_100g,
@@ -654,7 +657,7 @@ def convert_entry(  # noqa: PLR0912, PLR0911, C901, PLR0915
         "vitamin_b3": vitamin_b3 or None,
         "vitamin_b9": vitamin_b9 or None,
         **{
-            name: convert_nutrient(
+            name: _convert_nutrient(
                 value=getattr(nutriments, name),
                 unit=getattr(nutriments, f"{name}_unit"),
                 value_100g=getattr(nutriments, f"{name}_100g"),
@@ -667,7 +670,17 @@ def convert_entry(  # noqa: PLR0912, PLR0911, C901, PLR0915
     }
 
     if all(v is None for v in nutriment_values.values()):
-        return None
+        raise InvalidDataError("all nutrition data is zero")
+
+    metadata = {
+        "localized_names": localized_names or None,
+        "brands": (
+            ",".join(brand.strip() for brand in entry.brands.split(",")) if entry.brands else None
+        ),
+        "serving_quantity": serving_quantity,
+        "quantity": quantity,
+        "unit": unit,
+    }
 
     return models.OpenFoodFactsEntry(
         code=code,
@@ -676,47 +689,34 @@ def convert_entry(  # noqa: PLR0912, PLR0911, C901, PLR0915
             datetime.date.fromtimestamp(entry.last_updated_t) if entry.last_updated_t else created
         ),
         name=entry.product_name,
-        localized_names=localized_names or None,
-        brands=(
-            ",".join(brand.strip() for brand in entry.brands.split(",")) if entry.brands else None
-        ),
-        serving_quantity=serving_quantity,
-        quantity=quantity,
-        unit=unit,
-        **nutriment_values,
+        **{k: v for k, v in metadata.items() if v},
+        **{k: v for k, v in nutriment_values.items() if v},
     )
 
 
-def import_off(file: Path) -> None:
+def import_file(file: Path) -> None:
     total = 0
     valid = 0
     entries = []
-    with (
-        multiprocessing.Pool(multiprocessing.cpu_count()) as p,
-        app.app_context(),
-    ):
-        for entry in p.imap(
-            func=convert_entry,
-            iterable=enumerate(gzip.open(file)),
-            chunksize=1000 * multiprocessing.cpu_count(),
-        ):
+    with app.app_context():
+        for line in gzip.open(file):
             total += 1
-            if entry is None:
+            try:
+                entry = _convert_entry(line)
+            except InvalidDataError:
                 continue
 
             valid += 1
             entries.append(entry)
 
             if valid % 10000 == 0:
-                print(f"Valid entries: {valid}/{total}")
                 database.session.add_all(entries)
                 database.session.commit()
                 entries = []
 
-        print(f"Valid entries: {valid}/{total}")
         database.session.add_all(entries)
         database.session.commit()
 
 
 if __name__ == "__main__":
-    import_off(Path(sys.argv[1]))
+    import_file(Path(sys.argv[1]))  # pragma: no cover

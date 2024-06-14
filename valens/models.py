@@ -39,6 +39,18 @@ class Base(DeclarativeBase):
         }
     )
 
+    def __repr__(self) -> str:
+        # Source: https://stackoverflow.com/a/54034230
+        params = ", ".join(
+            f"{k}={v}"
+            for k, v in vars(self).items()
+            if (
+                not k.startswith("_")
+                and not any(hasattr(v, a) for a in ("_sa_adapter", "_sa_instance_state"))
+            )
+        )
+        return f"{self.__class__.__name__}({params})"
+
 
 class Sex(enum.IntEnum):
     FEMALE = 0
