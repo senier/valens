@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
 
 import datetime
-import gzip
 import json
 import sys
-from pathlib import Path
+import zlib
+from collections.abc import Generator
 from typing import Optional
 
+import requests
 from pydantic import BaseModel, Field
 
 from valens import app, database, models
@@ -694,12 +695,51 @@ def _convert_entry(  # noqa: PLR0912, C901, PLR0915
     )
 
 
-def import_file(file: Path) -> None:
+def _download_chunked(url: str, chunk_size: int = 8192) -> Generator[bytes, None, None]:
+    partial_input: bytes = b""
+    partial_output: Optional[bytes] = None
+
+    r = requests.get(url, stream=True)
+    r.raise_for_status()
+    decomp = zlib.decompressobj(32 + zlib.MAX_WBITS)
+
+    for chunk in r.iter_content(chunk_size=chunk_size):
+        if not chunk:
+            continue
+
+        # 42 seems to be the minimum input block size
+        if len(partial_input) + len(chunk) < 42:
+            partial_input = partial_input + chunk
+            continue
+
+        result = decomp.decompress(partial_input + chunk)
+        partial_input = b""
+
+        lines = result.split(b"\n")
+        if len(lines) > 1:
+            yield lines[0] if partial_output is None else partial_output + lines[0]
+            partial_output = None
+        partial_output = lines[-1] if partial_output is None else partial_output + lines[-1]
+        yield from lines[1:-1]
+
+    if len(partial_input) > 0:
+        lines = decomp.decompress(partial_input).split(b"\n")
+        if len(lines) > 1:
+            yield lines[0] if partial_output is None else partial_output + lines[0]
+            partial_output = None
+        partial_output = lines[-1] if partial_output is None else partial_output + lines[-1]
+        yield from lines[1:-1]
+
+    assert partial_output is not None
+    yield partial_output
+
+
+def import_url(url: str) -> None:
     total = 0
     valid = 0
     entries = []
     with app.app_context():
-        for line in gzip.open(file):
+        for line in _download_chunked(url):
             total += 1
             try:
                 entry = _convert_entry(line)
@@ -719,4 +759,4 @@ def import_file(file: Path) -> None:
 
 
 if __name__ == "__main__":
-    import_file(Path(sys.argv[1]))  # pragma: no cover
+    import_url(sys.argv[1])  # pragma: no cover

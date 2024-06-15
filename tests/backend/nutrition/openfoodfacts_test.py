@@ -1,13 +1,20 @@
+from __future__ import annotations
+
 import datetime
+import gzip
+import random
+from collections.abc import Iterator
 from typing import Optional
 
 import pytest
+import requests
 
 from valens.models import OpenFoodFactsEntry
 from valens.nutrition.openfoodfacts import (
     InvalidDataError,
     _convert_entry,
     _convert_nutrient,
+    _download_chunked,
     _valid_ean8,
     _valid_ean13,
     _valid_ean_country_code,
@@ -764,3 +771,64 @@ def test_valid_ean8(code: str, valid: bool) -> None:  # noqa: FBT001
 )
 def test_valid_ean13(code: str, valid: bool) -> None:  # noqa: FBT001
     assert _valid_ean13(code) == valid
+
+
+@pytest.mark.parametrize(
+    "chunk_size", [1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2024, 4096, 8192]
+)
+@pytest.mark.parametrize(
+    ("data"),
+    [
+        "",
+        "short single line",
+        1000 * "long single line",
+        10000 * "very long single line",
+        5 * "\n",
+        1000 * "\n",
+        10 * "few short lines\n",
+        1000 * "many short lines\n",
+        500 * "many short lines\n" + 500 * ((1000 * "many long lines") + "\n"),
+        1000 * ((1000 * "many long lines") + "\n"),
+    ],
+    ids=range(10),
+)
+def test_download_chunked(
+    monkeypatch: pytest.MonkeyPatch,
+    data: str,
+    chunk_size: int,
+) -> None:
+
+    class Request:
+        def __init__(self) -> None:
+            self._chunk_size = 0
+
+        def __iter__(self) -> Iterator[bytes]:
+            self._content = gzip.compress(data.encode())
+            self._pos = 0
+            return self
+
+        def __next__(self) -> bytes:
+            if self._pos >= len(self._content):
+                raise StopIteration
+            actual_chunk_size = random.randint(
+                0, min(self._chunk_size, len(self._content) - self._pos)
+            )
+            result = self._content[self._pos : self._pos + actual_chunk_size]
+            self._pos += actual_chunk_size
+            return result
+
+        def raise_for_status(self) -> None:
+            pass
+
+        def iter_content(self, chunk_size: int) -> Iterator[bytes]:
+            self._chunk_size = chunk_size
+            return self
+
+    def get_request(url: str, stream: bool) -> Request:  # noqa: ARG001, FBT001
+        return Request()
+
+    with monkeypatch.context() as m:
+        m.setattr(requests, "get", get_request)
+        assert list(_download_chunked(url="dummy", chunk_size=chunk_size)) == data.encode().split(
+            b"\n"
+        )
