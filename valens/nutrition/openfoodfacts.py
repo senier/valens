@@ -695,17 +695,27 @@ def _convert_entry(  # noqa: PLR0912, C901, PLR0915
     )
 
 
-def _download_chunked(url: str, chunk_size: int = 8192) -> Generator[bytes, None, None]:
+def _download_chunked(
+    url: str, chunk_size: int = 8192
+) -> Generator[tuple[bytes, Optional[float]], None, None]:
     partial_input: bytes = b""
     partial_output: Optional[bytes] = None
 
+    bytes_read: int = 0
+
     r = requests.get(url, stream=True)
     r.raise_for_status()
+
+    content_length = int(r.headers["Content-Length"]) if "Content-Length" in r.headers else None
     decomp = zlib.decompressobj(32 + zlib.MAX_WBITS)
+    progress: Optional[float] = None
 
     for chunk in r.iter_content(chunk_size=chunk_size):
         if not chunk:
             continue
+
+        bytes_read += len(chunk)
+        progress = bytes_read / content_length if content_length else None
 
         # 42 seems to be the minimum input block size
         if len(partial_input) + len(chunk) < 42:
@@ -717,21 +727,23 @@ def _download_chunked(url: str, chunk_size: int = 8192) -> Generator[bytes, None
 
         lines = result.split(b"\n")
         if len(lines) > 1:
-            yield lines[0] if partial_output is None else partial_output + lines[0]
+            yield lines[0] if partial_output is None else partial_output + lines[0], progress
             partial_output = None
         partial_output = lines[-1] if partial_output is None else partial_output + lines[-1]
-        yield from lines[1:-1]
+        for line in lines[1:-1]:
+            yield line, progress
 
     if len(partial_input) > 0:
         lines = decomp.decompress(partial_input).split(b"\n")
         if len(lines) > 1:
-            yield lines[0] if partial_output is None else partial_output + lines[0]
+            yield lines[0] if partial_output is None else partial_output + lines[0], progress
             partial_output = None
         partial_output = lines[-1] if partial_output is None else partial_output + lines[-1]
-        yield from lines[1:-1]
+        for line in lines[1:-1]:
+            yield line, progress
 
     assert partial_output is not None
-    yield partial_output
+    yield partial_output, progress
 
 
 def import_url(url: str) -> None:
@@ -739,7 +751,7 @@ def import_url(url: str) -> None:
     valid = 0
     entries = []
     with app.app_context():
-        for line in _download_chunked(url):
+        for line, _ in _download_chunked(url):
             total += 1
             try:
                 entry = _convert_entry(line)

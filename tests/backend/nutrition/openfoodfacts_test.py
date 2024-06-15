@@ -3,6 +3,7 @@ from __future__ import annotations
 import datetime
 import gzip
 import random
+import string
 from collections.abc import Iterator
 from typing import Optional
 
@@ -773,6 +774,32 @@ def test_valid_ean13(code: str, valid: bool) -> None:  # noqa: FBT001
     assert _valid_ean13(code) == valid
 
 
+class Request:
+    def __init__(self, data: bytes, level: int = 9) -> None:
+        self._pos = 0
+        self._chunk_size = 0
+        self._content = gzip.compress(data.encode(), compresslevel=level)
+        self.headers = {"Content-Length": len(self._content)}
+
+    def __iter__(self) -> Iterator[bytes]:
+        return self
+
+    def __next__(self) -> bytes:
+        if self._pos >= len(self._content):
+            raise StopIteration
+        actual_chunk_size = random.randint(0, min(self._chunk_size, len(self._content) - self._pos))
+        result = self._content[self._pos : self._pos + actual_chunk_size]
+        self._pos += actual_chunk_size
+        return result
+
+    def raise_for_status(self) -> None:
+        pass
+
+    def iter_content(self, chunk_size: int) -> Iterator[bytes]:
+        self._chunk_size = chunk_size
+        return self
+
+
 @pytest.mark.parametrize(
     "chunk_size", [1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2024, 4096, 8192]
 )
@@ -798,37 +825,36 @@ def test_download_chunked(
     chunk_size: int,
 ) -> None:
 
-    class Request:
-        def __init__(self) -> None:
-            self._chunk_size = 0
-
-        def __iter__(self) -> Iterator[bytes]:
-            self._content = gzip.compress(data.encode())
-            self._pos = 0
-            return self
-
-        def __next__(self) -> bytes:
-            if self._pos >= len(self._content):
-                raise StopIteration
-            actual_chunk_size = random.randint(
-                0, min(self._chunk_size, len(self._content) - self._pos)
-            )
-            result = self._content[self._pos : self._pos + actual_chunk_size]
-            self._pos += actual_chunk_size
-            return result
-
-        def raise_for_status(self) -> None:
-            pass
-
-        def iter_content(self, chunk_size: int) -> Iterator[bytes]:
-            self._chunk_size = chunk_size
-            return self
-
-    def get_request(url: str, stream: bool) -> Request:  # noqa: ARG001, FBT001
-        return Request()
+    def get_request(url: str, stream: bool) -> Request:  # noqa: FBT001, ARG001
+        return Request(data)
 
     with monkeypatch.context() as m:
         m.setattr(requests, "get", get_request)
-        assert list(_download_chunked(url="dummy", chunk_size=chunk_size)) == data.encode().split(
-            b"\n"
-        )
+        assert [
+            l for l, _ in _download_chunked(url="dummy", chunk_size=chunk_size)
+        ] == data.encode().split(b"\n")
+
+
+def test_download_chunked_progress(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+
+    data = (
+        "".join(random.choice(string.ascii_lowercase) for _ in range(5000))
+        + "\n"
+        + "".join(random.choice(string.ascii_lowercase) for _ in range(5000))
+    )
+
+    def get_request(url: str, stream: bool) -> Request:  # noqa: FBT001, ARG001
+        return Request(data, level=0)
+
+    with monkeypatch.context() as m:
+        m.setattr(requests, "get", get_request)
+        result = list(_download_chunked(url="dummy"))
+        expected = data.encode().split(b"\n")
+
+        assert result[0][0] == expected[0]
+        assert result[0][1] is not None
+        assert result[0][1] < 1.0
+        assert result[1][0] == expected[1]
+        assert result[1][1] == 1.0
