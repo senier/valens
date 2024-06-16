@@ -4,13 +4,16 @@ import datetime
 import gzip
 import random
 import string
-from collections.abc import Iterator
+from collections.abc import Generator, Iterator
+from pathlib import Path
 from typing import Optional
 
 import pytest
 import requests
 
+from valens import app, database
 from valens.models import OpenFoodFactsEntry
+from valens.nutrition import openfoodfacts
 from valens.nutrition.openfoodfacts import (
     InvalidDataError,
     _convert_entry,
@@ -19,6 +22,7 @@ from valens.nutrition.openfoodfacts import (
     _valid_ean8,
     _valid_ean13,
     _valid_ean_country_code,
+    import_url,
 )
 
 
@@ -527,6 +531,33 @@ def test_convert_entry_error(data: str, expected: str) -> None:
                 vitamin_b9=0.002,
             ),
         ),
+        (
+            """
+            { "id": "12",
+              "code": "44000271",
+              "created_t": 1234567890,
+              "product_name": "Apple",
+              "codes_tags": [ "code-8" ],
+              "nutriments": {
+                "energy-kcal": 123,
+                "folates": 1,
+                "folates_unit": "mg",
+                "vitamin-b9": 1,
+                "vitamin-b9_unit": "mg"
+              },
+              "brands" : "brand1,    brand2,brand3"
+            }
+            """,
+            OpenFoodFactsEntry(
+                code="44000271",
+                created=datetime.date.fromtimestamp(1234567890),
+                last_updated=datetime.date.fromtimestamp(1234567890),
+                name="Apple",
+                brands="brand1,brand2,brand3",
+                energy=123.0,
+                vitamin_b9=0.002,
+            ),
+        ),
     ],
 )
 def test_convert_entry(data: str, expected: OpenFoodFactsEntry) -> None:
@@ -778,7 +809,7 @@ class Request:
     def __init__(self, data: bytes, level: int = 9) -> None:
         self._pos = 0
         self._chunk_size = 0
-        self._content = gzip.compress(data.encode(), compresslevel=level)
+        self._content = gzip.compress(data, compresslevel=level)
         self.headers = {"Content-Length": len(self._content)}
 
     def __iter__(self) -> Iterator[bytes]:
@@ -826,7 +857,7 @@ def test_download_chunked(
 ) -> None:
 
     def get_request(url: str, stream: bool) -> Request:  # noqa: FBT001, ARG001
-        return Request(data)
+        return Request(data.encode())
 
     with monkeypatch.context() as m:
         m.setattr(requests, "get", get_request)
@@ -846,7 +877,7 @@ def test_download_chunked_progress(
     )
 
     def get_request(url: str, stream: bool) -> Request:  # noqa: FBT001, ARG001
-        return Request(data, level=0)
+        return Request(data.encode(), level=0)
 
     with monkeypatch.context() as m:
         m.setattr(requests, "get", get_request)
@@ -858,3 +889,54 @@ def test_download_chunked_progress(
         assert result[0][1] < 1.0
         assert result[1][0] == expected[1]
         assert result[1][1] == 1.0
+
+
+@pytest.mark.parametrize(
+    "data",
+    [
+        ["entry1", "invalid", "entry2"],
+        200 * ["entry"],
+        100 * ["entrya"] + ["invalid"] + 100 * ["entryb"],
+    ],
+)
+def test_import_url(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, data: list[str]) -> None:
+
+    saved_url: Optional[str] = None
+    saved_chunk_size: Optional[int] = None
+
+    def dummy_download_chunked(
+        url: str, chunk_size: int = 8192
+    ) -> Generator[tuple[bytes, Optional[float]], None, None]:
+        nonlocal saved_url, saved_chunk_size
+        saved_url = url
+        saved_chunk_size = chunk_size
+
+        for d in data:
+            yield (d.encode(), None)
+
+    def dummy_convert_entry(line: bytes) -> OpenFoodFactsEntry:
+        if line == b"invalid":
+            raise openfoodfacts.InvalidDataError
+
+        return OpenFoodFactsEntry(
+            code=line.decode().upper(),
+            name="dummy",
+            created=datetime.date.today(),
+            last_updated=datetime.date.today(),
+        )
+
+    with monkeypatch.context() as m, app.app_context():
+        app.config["DATABASE"] = f"sqlite:///{tmp_path / 'db.sqlite'}"
+        m.setattr(openfoodfacts, "_download_chunked", dummy_download_chunked)
+        m.setattr(openfoodfacts, "_convert_entry", dummy_convert_entry)
+        import_url(url="dummy-url", chunk_size=1234, commit_interval=100)
+        assert [
+            e.code
+            for e in (
+                database.session.get(OpenFoodFactsEntry, d.upper()) for d in data if d != "invalid"
+            )
+            if e is not None
+        ] == [d.upper() for d in data if d != "invalid"]
+
+    assert saved_url == "dummy-url"
+    assert saved_chunk_size == 1234

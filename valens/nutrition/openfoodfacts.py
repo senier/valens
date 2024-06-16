@@ -746,12 +746,12 @@ def _download_chunked(
     yield partial_output, progress
 
 
-def import_url(url: str) -> None:
+def import_url(url: str, chunk_size: int = 8192, commit_interval: int = 10000) -> None:
     total = 0
     valid = 0
     entries = []
     with app.app_context():
-        for line, _ in _download_chunked(url):
+        for line, _ in _download_chunked(url=url, chunk_size=chunk_size):
             total += 1
             try:
                 entry = _convert_entry(line)
@@ -761,7 +761,7 @@ def import_url(url: str) -> None:
             valid += 1
             entries.append(entry)
 
-            if valid % 10000 == 0:
+            if valid % commit_interval == 0:
                 database.session.add_all(entries)
                 database.session.commit()
                 entries = []
