@@ -2,15 +2,12 @@
 
 import datetime
 import json
-import sys
-import zlib
-from collections.abc import Generator
 from typing import Optional
 
-import requests
 from pydantic import BaseModel, Field
 
 from valens import app, database, models
+from valens.nutrition import utils
 
 ETHANOL_DENSITY_G_PER_ML = 0.789
 
@@ -695,64 +692,16 @@ def _convert_entry(  # noqa: PLR0912, C901, PLR0915
     )
 
 
-def _download_chunked(
-    url: str, chunk_size: int = 8192
-) -> Generator[tuple[bytes, Optional[float]], None, None]:
-    partial_input: bytes = b""
-    partial_output: Optional[bytes] = None
-
-    bytes_read: int = 0
-
-    r = requests.get(url, stream=True)
-    r.raise_for_status()
-
-    content_length = int(r.headers["Content-Length"]) if "Content-Length" in r.headers else None
-    decomp = zlib.decompressobj(32 + zlib.MAX_WBITS)
-    progress: Optional[float] = None
-
-    for chunk in r.iter_content(chunk_size=chunk_size):
-        if not chunk:
-            continue
-
-        bytes_read += len(chunk)
-        progress = bytes_read / content_length if content_length else None
-
-        # 42 seems to be the minimum input block size
-        if len(partial_input) + len(chunk) < 42:
-            partial_input = partial_input + chunk
-            continue
-
-        result = decomp.decompress(partial_input + chunk)
-        partial_input = b""
-
-        lines = result.split(b"\n")
-        if len(lines) > 1:
-            yield lines[0] if partial_output is None else partial_output + lines[0], progress
-            partial_output = None
-        partial_output = lines[-1] if partial_output is None else partial_output + lines[-1]
-        for line in lines[1:-1]:
-            yield line, progress
-
-    if len(partial_input) > 0:
-        lines = decomp.decompress(partial_input).split(b"\n")
-        if len(lines) > 1:
-            yield lines[0] if partial_output is None else partial_output + lines[0], progress
-            partial_output = None
-        partial_output = lines[-1] if partial_output is None else partial_output + lines[-1]
-        for line in lines[1:-1]:
-            yield line, progress
-
-    assert partial_output is not None
-    yield partial_output, progress
-
-
-def import_url(url: str, chunk_size: int = 8192, commit_interval: int = 10000) -> None:
-    total = 0
+def import_url(
+    url: str,
+    chunk_size: int = 1024 * 1024,
+    commit_interval: int = 10000,
+) -> None:
     valid = 0
     entries = []
+
     with app.app_context():
-        for line, _ in _download_chunked(url=url, chunk_size=chunk_size):
-            total += 1
+        for line, _ in utils.decompress_by_line(utils.download(url=url, chunk_size=chunk_size)):
             try:
                 entry = _convert_entry(line)
             except InvalidDataError:
@@ -768,7 +717,3 @@ def import_url(url: str, chunk_size: int = 8192, commit_interval: int = 10000) -
 
         database.session.add_all(entries)
         database.session.commit()
-
-
-if __name__ == "__main__":
-    import_url(sys.argv[1])  # pragma: no cover

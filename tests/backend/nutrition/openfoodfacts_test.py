@@ -2,14 +2,11 @@ from __future__ import annotations
 
 import datetime
 import gzip
-import random
-import string
-from collections.abc import Generator, Iterator
+from collections.abc import Generator
 from pathlib import Path
 from typing import Optional
 
 import pytest
-import requests
 
 from valens import app, database
 from valens.models import OpenFoodFactsEntry
@@ -18,7 +15,6 @@ from valens.nutrition.openfoodfacts import (
     InvalidDataError,
     _convert_entry,
     _convert_nutrient,
-    _download_chunked,
     _valid_ean8,
     _valid_ean13,
     _valid_ean_country_code,
@@ -805,98 +801,12 @@ def test_valid_ean13(code: str, valid: bool) -> None:  # noqa: FBT001
     assert _valid_ean13(code) == valid
 
 
-class Request:
-    def __init__(self, data: bytes, level: int = 9) -> None:
-        self._pos = 0
-        self._chunk_size = 0
-        self._content = gzip.compress(data, compresslevel=level)
-        self.headers = {"Content-Length": len(self._content)}
-
-    def __iter__(self) -> Iterator[bytes]:
-        return self
-
-    def __next__(self) -> bytes:
-        if self._pos >= len(self._content):
-            raise StopIteration
-        actual_chunk_size = random.randint(0, min(self._chunk_size, len(self._content) - self._pos))
-        result = self._content[self._pos : self._pos + actual_chunk_size]
-        self._pos += actual_chunk_size
-        return result
-
-    def raise_for_status(self) -> None:
-        pass
-
-    def iter_content(self, chunk_size: int) -> Iterator[bytes]:
-        self._chunk_size = chunk_size
-        return self
-
-
-@pytest.mark.parametrize(
-    "chunk_size", [1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2024, 4096, 8192]
-)
-@pytest.mark.parametrize(
-    ("data"),
-    [
-        "",
-        "short single line",
-        1000 * "long single line",
-        10000 * "very long single line",
-        5 * "\n",
-        1000 * "\n",
-        10 * "few short lines\n",
-        1000 * "many short lines\n",
-        500 * "many short lines\n" + 500 * ((1000 * "many long lines") + "\n"),
-        1000 * ((1000 * "many long lines") + "\n"),
-    ],
-    ids=range(10),
-)
-def test_download_chunked(
-    monkeypatch: pytest.MonkeyPatch,
-    data: str,
-    chunk_size: int,
-) -> None:
-
-    def get_request(url: str, stream: bool) -> Request:  # noqa: FBT001, ARG001
-        return Request(data.encode())
-
-    with monkeypatch.context() as m:
-        m.setattr(requests, "get", get_request)
-        assert [
-            l for l, _ in _download_chunked(url="dummy", chunk_size=chunk_size)
-        ] == data.encode().split(b"\n")
-
-
-def test_download_chunked_progress(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-
-    data = (
-        "".join(random.choice(string.ascii_lowercase) for _ in range(5000))
-        + "\n"
-        + "".join(random.choice(string.ascii_lowercase) for _ in range(5000))
-    )
-
-    def get_request(url: str, stream: bool) -> Request:  # noqa: FBT001, ARG001
-        return Request(data.encode(), level=0)
-
-    with monkeypatch.context() as m:
-        m.setattr(requests, "get", get_request)
-        result = list(_download_chunked(url="dummy"))
-        expected = data.encode().split(b"\n")
-
-        assert result[0][0] == expected[0]
-        assert result[0][1] is not None
-        assert result[0][1] < 1.0
-        assert result[1][0] == expected[1]
-        assert result[1][1] == 1.0
-
-
 @pytest.mark.parametrize(
     "data",
     [
         ["entry1", "invalid", "entry2"],
         200 * ["entry"],
-        100 * ["entrya"] + ["invalid"] + 100 * ["entryb"],
+        100 * ["entry_a"] + ["invalid"] + 100 * ["entry_b"],
     ],
 )
 def test_import_url(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, data: list[str]) -> None:
@@ -904,15 +814,18 @@ def test_import_url(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, data: list[
     saved_url: Optional[str] = None
     saved_chunk_size: Optional[int] = None
 
-    def dummy_download_chunked(
+    def dummy_download(
         url: str, chunk_size: int = 8192
     ) -> Generator[tuple[bytes, Optional[float]], None, None]:
         nonlocal saved_url, saved_chunk_size
         saved_url = url
         saved_chunk_size = chunk_size
 
-        for d in data:
-            yield (d.encode(), None)
+        position = 0
+        compressed = gzip.compress("\n".join(data).encode())
+        while position < len(compressed):
+            yield (compressed[position : position + chunk_size], None)
+            position += chunk_size
 
     def dummy_convert_entry(line: bytes) -> OpenFoodFactsEntry:
         if line == b"invalid":
@@ -927,8 +840,10 @@ def test_import_url(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, data: list[
 
     with monkeypatch.context() as m, app.app_context():
         app.config["DATABASE"] = f"sqlite:///{tmp_path / 'db.sqlite'}"
-        m.setattr(openfoodfacts, "_download_chunked", dummy_download_chunked)
+        app.config["OPENFOODFACTS_JSONL_URL"] = "http://example.com"
+        app.config["OPENFOODFACTS_DELTA_URL"] = "http://example.com"
         m.setattr(openfoodfacts, "_convert_entry", dummy_convert_entry)
+        m.setattr(openfoodfacts.utils, "download", dummy_download)  # type: ignore[attr-defined]
         import_url(url="dummy-url", chunk_size=1234, commit_interval=100)
         assert [
             e.code

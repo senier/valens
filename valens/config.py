@@ -7,7 +7,7 @@ from flask import current_app
 
 
 def check_app_config() -> None:
-    for key in ["DATABASE", "SECRET_KEY"]:
+    for key in ["DATABASE", "SECRET_KEY", "OPENFOODFACTS_JSONL_URL", "OPENFOODFACTS_DELTA_URL"]:
         if key not in current_app.config:
             raise RuntimeError(f"'{key}' is not set in app config")
 
@@ -27,7 +27,10 @@ def check_config_file(environ: dict[str, str]) -> None:
 def create_config_file(config_directory: Path, database_file: Path) -> Path:
     config = config_directory / "config.py"
     config.write_text(
-        f"DATABASE = 'sqlite:///{database_file}'\nSECRET_KEY = {os.urandom(24)!r}\n",
+        f"DATABASE = 'sqlite:///{database_file}'\n"
+        f"SECRET_KEY = {os.urandom(24)!r}\n"
+        "OPENFOODFACTS_JSONL_URL = 'https://static.openfoodfacts.org/data/openfoodfacts-products.jsonl.gz'\n"
+        "OPENFOODFACTS_DELTA_URL = 'https://static.openfoodfacts.org/data/delta'\n",
         encoding="utf-8",
     )
     return config
