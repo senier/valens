@@ -48,6 +48,11 @@ def main() -> int:
     )
     parser_demo.set_defaults(func=run_demo)
     parser_demo.add_argument(
+        "--export",
+        type=Path,
+        help="Export demo data to file",
+    )
+    parser_demo.add_argument(
         "--public",
         action="store_true",
         help="make the server publicly available (sould be only used on a trusted network)",
@@ -92,4 +97,8 @@ def run(args: argparse.Namespace) -> None:
 
 def run_demo(args: argparse.Namespace) -> None:
     with NamedTemporaryFile() as f:
-        demo.run(f"sqlite:///{f.name}", "0.0.0.0" if args.public else "127.0.0.1", args.port)
+        demo.run(
+            f"sqlite:///{args.export or f.name}",
+            "0.0.0.0" if args.public else "127.0.0.1",
+            args.port,
+        )
