@@ -243,16 +243,15 @@ pub fn view(model: &Model, data_model: &data::Model) -> Node<Msg> {
             3,
         );
 
-        let avg_rpe_per_week = data_model
-            .training_stats
-            .avg_rpe_per_week
-            .iter()
-            .filter(|(date, _)| {
-                *date >= model.interval.first
-                    && *date <= model.interval.last.week(Weekday::Mon).last_day()
-            })
-            .copied()
-            .collect::<Vec<_>>();
+        let avg_rpe_per_week = common::centered_moving_average(
+            &data_model
+                .training_sessions
+                .iter()
+                .filter_map(|(_, s)| s.avg_rpe().map(|v| (s.date, v)))
+                .collect::<Vec<_>>(),
+            &model.interval,
+            3,
+        );
         let training_sessions = data_model
             .training_sessions
             .values()
@@ -575,10 +574,10 @@ pub fn view_charts<Ms>(
         IF![
             show_rpe =>
             common::view_chart(
-                &[("RPE (weekly average)", common::COLOR_RPE)],
+                &[("RPE (7 day average)", common::COLOR_RPE)],
                 common::plot_chart(
                     &[common::PlotData{values: avg_rpe_per_week,
-                        plots: common::plot_line_with_dots(common::COLOR_RPE),
+                        plots: common::plot_line(common::COLOR_RPE),
                         params: common::PlotParams::primary_range(5., 10.)
                     }],
                     interval.first,
