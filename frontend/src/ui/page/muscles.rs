@@ -97,7 +97,7 @@ pub fn view(model: &Model, data_model: &data::Model) -> Node<Msg> {
                         common::plot_chart(
                             &[common::PlotData {
                                 values: set_volume,
-                                plots: common::plot_line(common::COLOR_SET_VOLUME),
+                                plots: common::plot_area_with_border(common::COLOR_SET_VOLUME, 0.2, 2),
                                 params: common::PlotParams::default(),
                             }],
                             model.interval.first,

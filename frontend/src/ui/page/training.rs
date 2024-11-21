@@ -562,7 +562,7 @@ pub fn view_charts<Ms>(
             common::plot_chart(
                 &[common::PlotData {
                     values: total_set_volume,
-                    plots: [common::PlotType::Line(common::COLOR_SET_VOLUME, 2)].to_vec(),
+                    plots: common::plot_area_with_border(common::COLOR_SET_VOLUME, 0.2, 2),
                     params: common::PlotParams::primary_range(0., 10.),
                 }],
                 interval.first,
