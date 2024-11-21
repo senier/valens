@@ -33,6 +33,7 @@ pub enum PlotType {
     Circle(usize, u32),
     Line(usize, u32),
     Histogram(usize),
+    Area(usize, f64),
 }
 
 pub fn plot_line_with_dots(color: usize) -> Vec<PlotType> {
@@ -41,6 +42,10 @@ pub fn plot_line_with_dots(color: usize) -> Vec<PlotType> {
 
 pub fn plot_line(color: usize) -> Vec<PlotType> {
     [PlotType::Line(color, 2)].to_vec()
+}
+
+pub fn plot_area_with_border(color: usize, opacity: f64, width: u32) -> Vec<PlotType> {
+    [PlotType::Area(color, opacity), PlotType::Line(color, width)].to_vec()
 }
 
 #[derive(Default)]
@@ -832,6 +837,18 @@ pub fn plot_chart(
                                 .margin(0) // https://github.com/plotters-rs/plotters/issues/300
                                 .data(series.iter().map(|(x, y)| (*x, *y)));
 
+                            if secondary {
+                                chart.draw_secondary_series(data)?
+                            } else {
+                                chart.draw_series(data)?
+                            }
+                        }
+                        PlotType::Area(color, opacity) => {
+                            let data = AreaSeries::new(
+                                series.iter().map(|(x, y)| (*x, *y)),
+                                0.0,
+                                Palette99::pick(color).mix(opacity),
+                            );
                             if secondary {
                                 chart.draw_secondary_series(data)?
                             } else {
