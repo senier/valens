@@ -34,6 +34,7 @@ pub enum PlotType {
     Circle(usize, u32),
     Line(usize, u32),
     Histogram(usize),
+    Area(usize),
 }
 
 pub fn plot_line_with_dots(color: usize) -> Vec<PlotType> {
@@ -824,6 +825,18 @@ pub fn plot_chart(
                                 .margin(0) // https://github.com/plotters-rs/plotters/issues/300
                                 .data(series.iter().map(|(x, y)| (*x, *y)));
 
+                            if secondary {
+                                chart.draw_secondary_series(data)?
+                            } else {
+                                chart.draw_series(data)?
+                            }
+                        }
+                        PlotType::Area(color) => {
+                            let data = AreaSeries::new(
+                                series.iter().map(|(x, y)| (*x, *y)),
+                                0.0,
+                                Palette99::pick(color).mix(0.3),
+                            );
                             if secondary {
                                 chart.draw_secondary_series(data)?
                             } else {
