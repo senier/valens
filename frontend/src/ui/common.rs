@@ -3,7 +3,7 @@ use std::{
     collections::{BTreeMap, HashMap},
 };
 
-use chrono::{prelude::*, Duration};
+use chrono::{prelude::*, Days, Duration};
 use plotters::prelude::*;
 use seed::{prelude::*, *};
 
@@ -1103,9 +1103,94 @@ pub fn post_message_to_service_worker(message: &ServiceWorkerMessage) -> Result<
     }
 }
 
+pub fn centered_moving_grouping(
+    data: &Vec<(NaiveDate, f32)>,
+    interval: &Interval,
+    radius: u64,
+    group_day: impl Fn(Vec<f32>) -> Option<f32>,
+    group_range: impl Fn(Vec<f32>) -> Option<f32>,
+) -> Vec<(NaiveDate, f32)> {
+    let mut date_map: BTreeMap<&NaiveDate, Vec<f32>> = BTreeMap::new();
+
+    for elem in data {
+        date_map.entry(&elem.0).or_default().push(elem.1);
+    }
+
+    let mut grouped: BTreeMap<&NaiveDate, f32> = BTreeMap::new();
+
+    for elem in date_map {
+        if let Some(result) = group_day(elem.1) {
+            grouped.insert(elem.0, result);
+        }
+    }
+
+    interval
+        .first
+        .iter_days()
+        .take_while(|d| *d <= interval.last)
+        .filter_map(|center| {
+            group_range(
+                center
+                    .checked_sub_days(Days::new(radius))
+                    .unwrap_or(center)
+                    .iter_days()
+                    .take_while(|d| {
+                        *d <= interval.last
+                            && *d <= center.checked_add_days(Days::new(radius)).unwrap_or(center)
+                    })
+                    .filter_map(|d| grouped.get(&d))
+                    .copied()
+                    .collect::<Vec<_>>(),
+            ).map(|result| (center, result))
+        })
+        .collect::<Vec<_>>()
+}
+
+pub fn centered_moving_total(
+    data: &Vec<(NaiveDate, f32)>,
+    interval: &Interval,
+    radius: u64,
+) -> Vec<(NaiveDate, f32)> {
+    centered_moving_grouping(
+        data,
+        interval,
+        radius,
+        |d| Some(d.iter().sum()),
+        |d| Some(d.iter().sum()),
+    )
+}
+
+pub fn centered_moving_average(
+    data: &Vec<(NaiveDate, f32)>,
+    interval: &Interval,
+    radius: u64,
+) -> Vec<(NaiveDate, f32)> {
+    #[allow(clippy::cast_precision_loss)]
+    centered_moving_grouping(
+        data,
+        interval,
+        radius,
+        |d| {
+            if d.is_empty() {
+                None
+            } else {
+                Some(d.iter().sum::<f32>() / d.len() as f32)
+            }
+        },
+        |d| {
+            if d.is_empty() {
+                None
+            } else {
+                Some(d.iter().sum::<f32>() / d.len() as f32)
+            }
+        },
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rstest::rstest;
 
     #[test]
     fn quartile_one() {
@@ -1238,6 +1323,78 @@ mod tests {
                 Quartile::Q3
             ),
             Duration::days(6)
+        );
+    }
+
+    #[rstest]
+    #[case((2020, 2, 3), (2020, 2, 5), 0, &[], &[])]
+    #[case((2020, 2, 3), (2020, 2, 5), 0, &[(2020, 2, 3, 1.0)], &[(2020, 2, 3, 1.0)])]
+    #[case((2020, 3, 3), (2020, 3, 5), 0, &[(2020, 2, 3, 1.0)], &[])]
+    #[case((2020, 2, 3), (2020, 2, 5), 0, &[(2020, 2, 3, 1.0), (2020, 2, 4, 1.0), (2020, 2, 5, 1.0)], &[(2020, 2, 3, 1.0), (2020, 2, 4, 1.0), (2020, 2, 5, 1.0)])]
+    #[case((2020, 2, 3), (2020, 2, 5), 0, &[(2020, 2, 3, 1.0), (2020, 2, 4, 1.0), (2020, 2, 5, 1.0), (2020, 2, 3, 3.0)], &[(2020, 2, 3, 2.0), (2020, 2, 4, 1.0), (2020, 2, 5, 1.0)])]
+    #[case((2020, 2, 3), (2020, 2, 5), 1, &[(2020, 2, 3, 1.0), (2020, 2, 4, 2.0), (2020, 2, 5, 3.0)], &[(2020, 2, 3, 1.5), (2020, 2, 4, 2.0), (2020, 2, 5, 2.5)])]
+    #[case((2020, 2, 2), (2020, 2, 6), 1, &[(2020, 2, 3, 1.0), (2020, 2, 4, 2.0), (2020, 2, 5, 3.0)], &[(2020, 2, 2, 1.0), (2020, 2, 3, 1.5), (2020, 2, 4, 2.0), (2020, 2, 5, 2.5), (2020, 2, 6, 3.0)])]
+    #[case((2020, 2, 3), (2020, 2, 7), 1, &[(2020, 2, 3, 1.0), (2020, 2, 7, 1.0)], &[(2020, 2, 3, 1.0), (2020, 2, 4, 1.0), (2020, 2, 6, 1.0), (2020, 2, 7, 1.0)])]
+    #[case((2020, 2, 3), (2020, 2, 9), 1, &[(2020, 2, 3, 1.0), (2020, 2, 9, 1.0)], &[(2020, 2, 3, 1.0), (2020, 2, 4, 1.0), (2020, 2, 8, 1.0), (2020, 2, 9, 1.0)])]
+    fn centered_moving_average(
+        #[case] start: (i32, u32, u32),
+        #[case] end: (i32, u32, u32),
+        #[case] radius: u64,
+        #[case] input: &[(i32, u32, u32, f32)],
+        #[case] expected: &[(i32, u32, u32, f32)],
+    ) {
+        assert_eq!(
+            super::centered_moving_average(
+                &input
+                    .iter()
+                    .map(|(y, m, d, v)| (NaiveDate::from_ymd_opt(*y, *m, *d).unwrap(), *v))
+                    .collect::<Vec<_>>(),
+                &Interval {
+                    first: NaiveDate::from_ymd_opt(start.0, start.1, start.2).unwrap(),
+                    last: NaiveDate::from_ymd_opt(end.0, end.1, end.2).unwrap(),
+                },
+                radius,
+            ),
+            expected
+                .iter()
+                .map(|(y, m, d, v)| (NaiveDate::from_ymd_opt(*y, *m, *d).unwrap(), *v))
+                .collect::<Vec<_>>(),
+        );
+    }
+
+    #[rstest]
+    #[case((2020, 2, 3), (2020, 2, 5), 0, &[], &[(2020, 2, 3, 0.0), (2020, 2, 4, 0.0), (2020, 2, 5, 0.0)])]
+    #[case((2020, 3, 3), (2020, 3, 5), 0, &[(2020, 2, 3, 1.0)], &[(2020, 3, 3, 0.0), (2020, 3, 4, 0.0), (2020, 3, 5, 0.0)])]
+    #[case((2020, 2, 3), (2020, 2, 5), 0, &[(2020, 2, 3, 1.0)], &[(2020, 2, 3, 1.0), (2020, 2, 4, 0.0), (2020, 2, 5, 0.0)])]
+    #[case((2020, 2, 3), (2020, 2, 5), 0, &[(2020, 2, 3, 1.0), (2020, 2, 4, 2.0), (2020, 2, 5, 3.0)], &[(2020, 2, 3, 1.0), (2020, 2, 4, 2.0), (2020, 2, 5, 3.0)])]
+    #[case((2020, 2, 3), (2020, 2, 5), 0, &[(2020, 2, 3, 1.0), (2020, 2, 4, 2.0), (2020, 2, 5, 3.0), (2020, 2, 3, 1.0)], &[(2020, 2, 3, 2.0), (2020, 2, 4, 2.0), (2020, 2, 5, 3.0)])]
+    #[case((2020, 2, 3), (2020, 2, 5), 1, &[(2020, 2, 3, 1.0), (2020, 2, 4, 2.0), (2020, 2, 5, 3.0)], &[(2020, 2, 3, 3.0), (2020, 2, 4, 6.0), (2020, 2, 5, 5.0)])]
+    #[case((2020, 2, 2), (2020, 2, 6), 1, &[(2020, 2, 3, 1.0), (2020, 2, 4, 2.0), (2020, 2, 5, 3.0)], &[(2020, 2, 2, 1.0), (2020, 2, 3, 3.0), (2020, 2, 4, 6.0), (2020, 2, 5, 5.0), (2020, 2, 6, 3.0)])]
+    #[case((2020, 2, 3), (2020, 2, 7), 1, &[(2020, 2, 3, 1.0), (2020, 2, 7, 1.0)], &[(2020, 2, 3, 1.0), (2020, 2, 4, 1.0), (2020, 2, 5, 0.0), (2020, 2, 6, 1.0), (2020, 2, 7, 1.0)])]
+    #[case((2020, 2, 3), (2020, 2, 9), 1, &[(2020, 2, 3, 1.0), (2020, 2, 9, 1.0)], &[(2020, 2, 3, 1.0), (2020, 2, 4, 1.0), (2020, 2, 5, 0.0), (2020, 2, 6, 0.0), (2020, 2, 7, 0.0), (2020, 2, 8, 1.0), (2020, 2, 9, 1.0)])]
+    fn centered_moving_total(
+        #[case] start: (i32, u32, u32),
+        #[case] end: (i32, u32, u32),
+        #[case] radius: u64,
+        #[case] input: &[(i32, u32, u32, f32)],
+        #[case] expected: &[(i32, u32, u32, f32)],
+    ) {
+        assert_eq!(
+            super::centered_moving_total(
+                &input
+                    .iter()
+                    .map(|(y, m, d, v)| (NaiveDate::from_ymd_opt(*y, *m, *d).unwrap(), *v))
+                    .collect::<Vec<_>>(),
+                &Interval {
+                    first: NaiveDate::from_ymd_opt(start.0, start.1, start.2).unwrap(),
+                    last: NaiveDate::from_ymd_opt(end.0, end.1, end.2).unwrap(),
+                },
+                radius,
+            ),
+            expected
+                .iter()
+                .map(|(y, m, d, v)| (NaiveDate::from_ymd_opt(*y, *m, *d).unwrap(), *v))
+                .collect::<Vec<_>>(),
         );
     }
 }
