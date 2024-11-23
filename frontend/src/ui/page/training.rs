@@ -531,18 +531,18 @@ pub fn view_charts<Ms>(
             common::plot_chart(
                 &[
                     common::PlotData {
-                        values: long_term_load_low,
-                        plots: common::plot_line_with_dots(common::COLOR_LONG_TERM_LOAD_BOUNDS),
+                        values: long_term_load_high,
+                        plots: [common::PlotType::Area(common::COLOR_LONG_TERM_LOAD_BOUNDS)].to_vec(),
                         params: common::PlotParams::primary_range(0., 10.),
                     },
                     common::PlotData {
-                        values: long_term_load_high,
-                        plots: common::plot_line_with_dots(common::COLOR_LONG_TERM_LOAD_BOUNDS),
+                        values: long_term_load_low,
+                        plots: [common::PlotType::Area(20)].to_vec(),
                         params: common::PlotParams::primary_range(0., 10.),
                     },
                     common::PlotData {
                         values: long_term_load,
-                        plots: common::plot_line_with_dots(common::COLOR_LONG_TERM_LOAD),
+                        plots: common::plot_line(common::COLOR_LONG_TERM_LOAD),
                         params: common::PlotParams::primary_range(0., 10.),
                     },
                     common::PlotData {

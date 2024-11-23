@@ -835,7 +835,7 @@ pub fn plot_chart(
                             let data = AreaSeries::new(
                                 series.iter().map(|(x, y)| (*x, *y)),
                                 0.0,
-                                Palette99::pick(color).mix(0.3),
+                                Palette99::pick(color).mix(1.0),
                             );
                             if secondary {
                                 chart.draw_secondary_series(data)?
@@ -861,7 +861,7 @@ fn all_zeros(data: &[PlotData]) -> bool {
         .unwrap_or(true)
 }
 
-fn colors(theme: &data::Theme) -> (RGBColor, RGBColor) {
+pub fn colors(theme: &data::Theme) -> (RGBColor, RGBColor) {
     let dark = RGBColor(20, 22, 26);
     match theme {
         data::Theme::System | data::Theme::Light => (dark, WHITE),
