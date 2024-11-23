@@ -1113,7 +1113,7 @@ pub fn centered_moving_grouping(
     radius: u64,
     group_day: impl Fn(Vec<f32>) -> Option<f32>,
     group_range: impl Fn(Vec<f32>) -> Option<f32>,
-) -> Vec<(NaiveDate, f32)> {
+) -> Vec<Vec<(NaiveDate, f32)>> {
     let mut date_map: BTreeMap<&NaiveDate, Vec<f32>> = BTreeMap::new();
 
     for elem in data {
@@ -1132,23 +1132,38 @@ pub fn centered_moving_grouping(
         .first
         .iter_days()
         .take_while(|d| *d <= interval.last)
-        .filter_map(|center| {
-            group_range(
-                center
-                    .checked_sub_days(Days::new(radius))
-                    .unwrap_or(center)
-                    .iter_days()
-                    .take_while(|d| {
-                        *d <= interval.last
-                            && *d <= center.checked_add_days(Days::new(radius)).unwrap_or(center)
-                    })
-                    .filter_map(|d| grouped.get(&d))
-                    .copied()
-                    .collect::<Vec<_>>(),
-            )
-            .map(|result| (center, result))
-        })
-        .collect::<Vec<_>>()
+        .fold(
+            vec![vec![]],
+            |mut result: Vec<Vec<(NaiveDate, f32)>>, center| {
+                let value = group_range(
+                    center
+                        .checked_sub_days(Days::new(radius))
+                        .unwrap_or(center)
+                        .iter_days()
+                        .take_while(|d| {
+                            *d <= interval.last
+                                && *d
+                                    <= center.checked_add_days(Days::new(radius)).unwrap_or(center)
+                        })
+                        .filter_map(|d| grouped.get(&d))
+                        .copied()
+                        .collect::<Vec<_>>(),
+                );
+                if let Some(last) = result.last_mut() {
+                    match value {
+                        Some(v) => {
+                            last.push((center, v));
+                        }
+                        None => {
+                            if !last.is_empty() {
+                                result.push(vec![]);
+                            }
+                        }
+                    }
+                }
+                result
+            },
+        )
 }
 
 pub fn centered_moving_total(
@@ -1162,14 +1177,14 @@ pub fn centered_moving_total(
         radius,
         |d| Some(d.iter().sum()),
         |d| Some(d.iter().sum()),
-    )
+    )[0].clone()
 }
 
 pub fn centered_moving_average(
     data: &Vec<(NaiveDate, f32)>,
     interval: &Interval,
     radius: u64,
-) -> Vec<(NaiveDate, f32)> {
+) -> Vec<Vec<(NaiveDate, f32)>> {
     #[allow(clippy::cast_precision_loss)]
     centered_moving_grouping(
         data,
