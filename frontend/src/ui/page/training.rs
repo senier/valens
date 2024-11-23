@@ -326,7 +326,7 @@ pub fn view(model: &Model, data_model: &data::Model) -> Node<Msg> {
                 short_term_load,
                 long_term_load,
                 total_7day_set_volume,
-                avg_rpe_per_week,
+                &avg_rpe_per_week,
                 &model.interval,
                 data_model.theme(),
                 data_model.settings.show_rpe,
@@ -507,7 +507,7 @@ pub fn view_charts<Ms>(
     short_term_load: Vec<(NaiveDate, f32)>,
     long_term_load: Vec<(NaiveDate, f32)>,
     total_set_volume: Vec<(NaiveDate, f32)>,
-    avg_rpe_per_week: Vec<(NaiveDate, f32)>,
+    avg_rpe_per_week: &[Vec<(NaiveDate, f32)>],
     interval: &common::Interval,
     theme: &data::Theme,
     show_rpe: bool,
@@ -576,10 +576,10 @@ pub fn view_charts<Ms>(
             common::view_chart(
                 &[("RPE (7 day average)", common::COLOR_RPE)],
                 common::plot_chart(
-                    &[common::PlotData{values: avg_rpe_per_week,
+                    &avg_rpe_per_week.iter().map(|values| common::PlotData{values: values.clone(),
                         plots: common::plot_line(common::COLOR_RPE),
                         params: common::PlotParams::primary_range(5., 10.)
-                    }],
+                    }).collect::<Vec<_>>(),
                     interval.first,
                     interval.last,
                     theme,
