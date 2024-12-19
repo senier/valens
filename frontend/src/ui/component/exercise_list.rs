@@ -1,4 +1,6 @@
+use chrono::{Duration, Local};
 use seed::{prelude::*, *};
+use std::collections::BTreeSet;
 
 use crate::{
     domain,
@@ -120,20 +122,49 @@ pub fn update(msg: Msg, model: &mut Model, _orders: &mut impl Orders<Msg>) -> Ou
 // ------ ------
 
 pub fn view(model: &Model, loading: bool, data_model: &data::Model) -> Vec<Node<Msg>> {
+    let cutoff = Local::now().date_naive() - Duration::days(31);
     let muscle_filter = domain::Muscle::iter()
         .map(|m| (m, model.filter.muscles.contains(m)))
         .collect::<Vec<_>>();
 
+    let current_exercise_ids = data_model
+        .training_sessions
+        .iter()
+        .filter(|(_, s)| s.date >= cutoff)
+        .flat_map(|(_, session)| session.exercises())
+        .collect::<BTreeSet<_>>();
+
+    let previous_exercise_ids = data_model
+        .training_sessions
+        .iter()
+        .filter(|(_, s)| s.date < cutoff)
+        .flat_map(|(_, session)| session.exercises())
+        .collect::<BTreeSet<_>>();
+
     let exercises = data_model.exercises(&model.filter);
-    let mut exercises = exercises
+
+    let mut current_exercises = exercises
         .iter()
         .filter(|e| {
             e.name
                 .to_lowercase()
                 .contains(model.search_term.to_lowercase().trim())
+                && (current_exercise_ids.contains(&e.id) || !previous_exercise_ids.contains(&e.id))
         })
         .collect::<Vec<_>>();
-    exercises.sort_by(|a, b| a.name.cmp(&b.name));
+    current_exercises.sort_by(|a, b| a.name.cmp(&b.name));
+
+    let mut previous_exercises = exercises
+        .iter()
+        .filter(|e| {
+            e.name
+                .to_lowercase()
+                .contains(model.search_term.to_lowercase().trim())
+                && !current_exercise_ids.contains(&e.id)
+                && previous_exercise_ids.contains(&e.id)
+        })
+        .collect::<Vec<_>>();
+    previous_exercises.sort_by(|a, b| a.name.cmp(&b.name));
 
     nodes![
         IF![model.view_filter_dialog => view_filter_dialog(&muscle_filter, exercises.len())],
@@ -154,7 +185,7 @@ pub fn view(model: &Model, loading: bool, data_model: &data::Model) -> Vec<Node<
             if model.view_create {
                 let disabled = loading
                     || model.search_term.is_empty()
-                    || exercises
+                    || current_exercises
                         .iter()
                         .any(|e| e.name == *model.search_term.trim());
                 div![
@@ -202,6 +233,17 @@ pub fn view(model: &Model, loading: bool, data_model: &data::Model) -> Vec<Node<
                     })
             ],
         ],
+        view_exercises(model, "Current exercises", &current_exercises),
+        view_exercises(model, "Previous exercises", &previous_exercises),
+    ]
+}
+
+fn view_exercises(model: &Model, title: &str, exercises: &[&&domain::Exercise]) -> Vec<Node<Msg>> {
+    if exercises.is_empty() {
+        return vec![];
+    }
+    nodes![
+        common::view_title(&span![title], 1),
         div![
             C!["table-container"],
             C!["mt-2"],
@@ -253,7 +295,7 @@ pub fn view(model: &Model, loading: bool, data_model: &data::Model) -> Vec<Node<
                     ]]
                 })],
             ]
-        ],
+        ]
     ]
 }
 
